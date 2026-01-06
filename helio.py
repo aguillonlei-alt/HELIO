@@ -8,7 +8,7 @@ import smbus2
 from datetime import datetime
 
 # --- Configuration ---
-DHT_SENSOR_PIN = board.D4    # GPIO 4 (Pin 7)
+DHT_SENSOR_PIN = board.D17    # GPIO 17 (Pin 11)
 LCD_I2C_ADDRESS = 0x27       # Standard I2C address
 LOG_INTERVAL = 3600          # Log and Upload every 1 Hour (3600 seconds)
 
