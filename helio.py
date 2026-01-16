@@ -23,45 +23,76 @@ SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
 # --- Hardware Initialization ---
 # Initialize DHT11
-dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
+try:
+    dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
+except Exception as e:
+    print(f"Error initializing DHT11: {e}")
 
 # Initialize LCD (I2C)
-class I2CLCD1602:
-    def __init__(self, address, bus_num=1):
-        self.address = address
-        self.bus = smbus2.SMBus(bus_num)
-        self.init_lcd()
+class I2CLCD:
+    def __init__(self, addr, port=1):
+        self.addr = addr
+        self.bus = smbus2.SMBus(port)
+        self.LCD_WIDTH = 20   # Maximum characters per line
+        self.ENABLE = 0b00000100 # Enable bit
+        self.TIMING = 0.0005     # Timing constants
+        self.E_PULSE = 0.0005
+        self.E_DELAY = 0.0005
+        self.BACKLIGHT = 0x08  # On
+        
+        self.lcd_byte(0x33, 0) # 110011 Initialise
+        self.lcd_byte(0x32, 0) # 110010 Initialise
+        self.lcd_byte(0x06, 0) # 000110 Cursor move direction
+        self.lcd_byte(0x0C, 0) # 001100 Display On,Cursor Off, Blink Off
+        self.lcd_byte(0x28, 0) # 101000 Data length, number of lines, font size
+        self.lcd_byte(0x01, 0) # 000001 Clear display
+        time.sleep(self.E_DELAY)
 
-    def write_command(self, cmd):
-        try: self.bus.write_byte_data(self.address, 0x80, cmd)
-        except: pass
+    def lcd_byte(self, bits, mode):
+        # bits = data
+        # mode = 1 for data, 0 for command
+        bits_high = mode | (bits & 0xF0) | self.BACKLIGHT
+        bits_low = mode | ((bits << 4) & 0xF0) | self.BACKLIGHT
 
-    def write_data(self, data):
-        try: self.bus.write_byte_data(self.address, 0x40, data)
-        except: pass
+        # High bits
+        self.bus.write_byte(self.addr, bits_high)
+        self.lcd_toggle_enable(bits_high)
 
-    def init_lcd(self):
-        try:
-            time.sleep(0.05)
-            self.write_command(0x30); time.sleep(0.005)
-            self.write_command(0x30); time.sleep(0.001)
-            self.write_command(0x30); self.write_command(0x20)
-            self.write_command(0x28); self.write_command(0x0C)
-            self.write_command(0x01); time.sleep(0.002)
-        except: pass
+        # Low bits
+        self.bus.write_byte(self.addr, bits_low)
+        self.lcd_toggle_enable(bits_low)
 
-    def display_string(self, string, line):
-        if line == 1: addr = 0x80
-        elif line == 2: addr = 0xC0
-        else: return
-        self.write_command(addr)
-        for char in string: self.write_data(ord(char))
+    def lcd_toggle_enable(self, bits):
+        time.sleep(self.E_DELAY)
+        self.bus.write_byte(self.addr, (bits | self.ENABLE))
+        time.sleep(self.E_PULSE)
+        self.bus.write_byte(self.addr, (bits & ~self.ENABLE))
+        time.sleep(self.E_DELAY)
 
+    def display_string(self, message, line):
+        # Send string to display
+        message = message.ljust(self.LCD_WIDTH, " ")
+        if line == 1:
+            self.lcd_byte(0x80, 0)
+        elif line == 2:
+            self.lcd_byte(0xC0, 0)
+        elif line == 3:
+            self.lcd_byte(0x94, 0)
+        elif line == 4:
+            self.lcd_byte(0xD4, 0)
+
+        for i in range(self.LCD_WIDTH):
+            self.lcd_byte(ord(message[i]), 1)
+
+# Initialize LCD
 try:
-    lcd = I2CLCD1602(LCD_I2C_ADDRESS)
-except:
+    lcd = I2CLCD(LCD_I2C_ADDRESS)
+    lcd.display_string("HELIO System", 1)
+    lcd.display_string("Initializing...", 2)
+except Exception as e:
     lcd = None
-    print("LCD not found. Check wiring.")
+    # This will now print the REAL error if something goes wrong
+    print(f"LCD Error details: {e}")
 
 # --- Calculation Function ---
 def calculate_heat_index(T_c, R):
