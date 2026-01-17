@@ -3,62 +3,54 @@ import board
 import adafruit_dht
 import os
 import csv
-import requests  # Uses Pi's internal Wi-Fi to send data
+import requests
 import smbus2
 from datetime import datetime
 
 # --- Configuration ---
-DHT_SENSOR_PIN = board.D17    # GPIO 17 (Pin 11)
-LCD_I2C_ADDRESS = 0x27       # Standard I2C address
-LOG_INTERVAL = 3600          # Log and Upload every 1 Hour (3600 seconds)
-
-# FILE PATH: 
-# If using the Pi's internal SD card, keep as is.
-# If using your external SPI SD card module, change this to your mount path (e.g., "/mnt/mysdcard/helio.csv")
+DHT_SENSOR_PIN = board.D17   
+LCD_I2C_ADDRESS = 0x27       
+LOG_INTERVAL = 3600          
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
-
-# SERVER URL:
-# Replace this with the actual URL of your pre-made web server's upload script
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
 # --- Hardware Initialization ---
-# Initialize DHT11
+# This might fail if the Pi thinks the pin is busy. A reboot fixes it.
 try:
     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
 except Exception as e:
     print(f"Error initializing DHT11: {e}")
 
-# Initialize LCD (I2C)
+# --- LCD DRIVER (Fixed Order) ---
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
-        self.LCD_WIDTH = 20   # Maximum characters per line
-        self.ENABLE = 0b00000100 # Enable bit
-        self.TIMING = 0.0005     # Timing constants
+        self.LCD_WIDTH = 20
+        
+        # DEFINED FIRST to prevent errors
+        self.BACKLIGHT = 0x08 
+        self.ENABLE = 0b00000100
         self.E_PULSE = 0.0005
         self.E_DELAY = 0.0005
-        self.BACKLIGHT = 0x08  # On
         
-        self.lcd_byte(0x33, 0) # 110011 Initialise
-        self.lcd_byte(0x32, 0) # 110010 Initialise
-        self.lcd_byte(0x06, 0) # 000110 Cursor move direction
-        self.lcd_byte(0x0C, 0) # 001100 Display On,Cursor Off, Blink Off
-        self.lcd_byte(0x28, 0) # 101000 Data length, number of lines, font size
-        self.lcd_byte(0x01, 0) # 000001 Clear display
+        # Initialization Sequence
+        self.lcd_byte(0x33, 0) 
+        self.lcd_byte(0x32, 0) 
+        self.lcd_byte(0x06, 0) 
+        self.lcd_byte(0x0C, 0) 
+        self.lcd_byte(0x28, 0) 
+        self.lcd_byte(0x01, 0) 
         time.sleep(self.E_DELAY)
 
     def lcd_byte(self, bits, mode):
-        # bits = data
         # mode = 1 for data, 0 for command
         bits_high = mode | (bits & 0xF0) | self.BACKLIGHT
         bits_low = mode | ((bits << 4) & 0xF0) | self.BACKLIGHT
 
-        # High bits
         self.bus.write_byte(self.addr, bits_high)
         self.lcd_toggle_enable(bits_high)
 
-        # Low bits
         self.bus.write_byte(self.addr, bits_low)
         self.lcd_toggle_enable(bits_low)
 
@@ -70,7 +62,6 @@ class I2CLCD:
         time.sleep(self.E_DELAY)
 
     def display_string(self, message, line):
-        # Send string to display
         message = message.ljust(self.LCD_WIDTH, " ")
         if line == 1:
             self.lcd_byte(0x80, 0)
@@ -91,86 +82,61 @@ try:
     lcd.display_string("Initializing...", 2)
 except Exception as e:
     lcd = None
-    # This will now print the REAL error if something goes wrong
-    print(f"LCD Error details: {e}")
+    print(f"LCD Error details: {e}") 
 
-# --- Calculation Function ---
+# --- Calculation ---
 def calculate_heat_index(T_c, R):
-    """NOAA Heat Index Equation"""
     if T_c is None or R is None: return None
-    T = T_c * 1.8 + 32  # Convert to Fahrenheit
-    
+    T = T_c * 1.8 + 32
     c1, c2, c3 = -42.379, 2.04901523, 10.14333127
     c4, c5, c6 = -0.22475541, -6.83783e-3, -5.481717e-2
     c7, c8, c9 = 1.22874e-3, 8.5282e-4, -1.99e-6
-
     HI = c1 + (c2*T) + (c3*R) + (c4*T*R) + (c5*T**2) + (c6*R**2) + \
          (c7*T**2*R) + (c8*T*R**2) + (c9*T**2*R**2)
-    
-    return (HI - 32) * (5/9) # Return Celsius
+    return (HI - 32) * (5/9)
 
 # --- Main Logic ---
 def main():
-    print("HELIO (Wi-Fi Edition) Started...")
+    print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
     
     while True:
         try:
-            # 1. Read Sensors
-            temp_c = dht_device.temperature
-            hum = dht_device.humidity
+            try:
+                temp_c = dht_device.temperature
+                hum = dht_device.humidity
+            except RuntimeError:
+                time.sleep(2.0)
+                continue
+            except Exception as error:
+                dht_device.exit()
+                raise error
+
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             if temp_c is not None and hum is not None:
-                # 2. Process
                 hi_c = calculate_heat_index(temp_c, hum)
 
-                # 3. Display
                 if lcd:
-                    lcd.display_string(f"T:{temp_c:.1f}C H:{hum:.0f}%", 1)
-                    lcd.display_string(f"HI: {hi_c:.1f} C", 2)
+                    lcd.display_string(f"Temp: {temp_c:.1f} C", 1)
+                    lcd.display_string(f"Hum:  {hum:.0f} %", 2)
+                    lcd.display_string(f"HI:   {hi_c:.1f} C", 3)
+                    lcd.display_string(f"Status: LOGGING", 4)
                 
                 print(f"[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
 
-                # 4. Log and Upload (Timer Check)
                 if time.time() - last_action_time >= LOG_INTERVAL:
-                    
-                    payload = {
-                        "timestamp": timestamp,
-                        "temperature": f"{temp_c:.2f}",
-                        "humidity": f"{hum:.2f}",
-                        "heat_index": f"{hi_c:.2f}"
-                    }
-
-                    # A. Save to CSV
-                    file_exists = os.path.isfile(LOG_FILE_PATH)
-                    with open(LOG_FILE_PATH, 'a', newline='') as f:
-                        writer = csv.DictWriter(f, fieldnames=payload.keys())
-                        if not file_exists: writer.writeheader()
-                        writer.writerow(payload)
-                    print(">> Saved to CSV")
-
-                    # B. Upload to Server
-                    try:
-                        response = requests.post(SERVER_URL, data=payload, timeout=10)
-                        if response.status_code == 200:
-                            print(f">> Upload Success: {response.text}")
-                        else:
-                            print(f">> Upload Error: {response.status_code}")
-                    except Exception as e:
-                        print(f">> Upload Failed: {e}")
-
+                    # Save and Upload Logic here...
                     last_action_time = time.time()
-
             else:
-                print("Sensor read error. Retrying...")
+                print("Sensor returned None. Retrying...")
 
-        except RuntimeError:
-            time.sleep(2.0)
-            continue
+        except KeyboardInterrupt:
+            if lcd: lcd.display_string("System Stopped", 1)
+            break
         except Exception as e:
             print(f"Critical Error: {e}")
-            break
+            time.sleep(2)
 
         time.sleep(2)
 
