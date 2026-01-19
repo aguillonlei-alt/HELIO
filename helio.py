@@ -15,7 +15,6 @@ LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
 # --- Hardware Initialization ---
-# This might fail if the Pi thinks the pin is busy. A reboot fixes it.
 try:
     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
 except Exception as e:
@@ -28,13 +27,14 @@ class I2CLCD:
         self.bus = smbus2.SMBus(port)
         self.LCD_WIDTH = 20
         
-        # DEFINED FIRST to prevent errors
+        # FIXED: These are now defined FIRST so the code doesn't crash
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
+        self.TIMING = 0.0005
         self.E_PULSE = 0.0005
         self.E_DELAY = 0.0005
         
-        # Initialization Sequence
+        # Initialization Sequence (Runs AFTER variables are set)
         self.lcd_byte(0x33, 0) 
         self.lcd_byte(0x32, 0) 
         self.lcd_byte(0x06, 0) 
@@ -126,7 +126,28 @@ def main():
                 print(f"[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
 
                 if time.time() - last_action_time >= LOG_INTERVAL:
-                    # Save and Upload Logic here...
+                    payload = {
+                        "timestamp": timestamp,
+                        "temperature": f"{temp_c:.2f}",
+                        "humidity": f"{hum:.2f}",
+                        "heat_index": f"{hi_c:.2f}"
+                    }
+
+                    # Log to CSV
+                    file_exists = os.path.isfile(LOG_FILE_PATH)
+                    with open(LOG_FILE_PATH, 'a', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=payload.keys())
+                        if not file_exists: writer.writeheader()
+                        writer.writerow(payload)
+                    print(">> Saved to CSV")
+
+                    # Upload to Server
+                    try:
+                        requests.post(SERVER_URL, data=payload, timeout=10)
+                        print(">> Upload Attempted")
+                    except Exception as e:
+                        print(f">> Upload Failed: {e}")
+
                     last_action_time = time.time()
             else:
                 print("Sensor returned None. Retrying...")
