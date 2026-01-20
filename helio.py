@@ -1,6 +1,6 @@
 import time
 import board
-import adafruit_dht
+import adafruit_dht as dht  # FIXED: Imported as 'dht'
 import os
 import csv
 import requests
@@ -9,25 +9,25 @@ from datetime import datetime
 
 # --- Configuration ---
 DHT_SENSOR_PIN = board.D17   
-LCD_I2C_ADDRESS = 0x27        
+LCD_I2C_ADDRESS = 0x27       
 LOG_INTERVAL = 3600          
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
-# --- LCD DRIVER ---
+# --- LCD DRIVER CLASS ---
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
         self.LCD_WIDTH = 20
         
+        # DEFINED FIRST to prevent "AttributeError"
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
-        self.TIMING = 0.0005
         self.E_PULSE = 0.0005
         self.E_DELAY = 0.0005
         
-        # Initialization
+        # Initialization Sequence
         self.lcd_byte(0x33, 0) 
         self.lcd_byte(0x32, 0) 
         self.lcd_byte(0x06, 0) 
@@ -60,14 +60,14 @@ class I2CLCD:
         for i in range(self.LCD_WIDTH):
             self.lcd_byte(ord(message[i]), 1)
 
-# Initialize LCD (Global)
+# --- Initialize LCD (Global) ---
 try:
     lcd = I2CLCD(LCD_I2C_ADDRESS)
     lcd.display_string("HELIO System", 1)
-    lcd.display_string("Initializing...", 2)
+    lcd.display_string("Booting...", 2)
 except Exception as e:
     lcd = None
-    print(f"LCD Error: {e}") 
+    print(f"LCD Init Error: {e}") 
 
 # --- Calculation ---
 def calculate_heat_index(T_c, R):
@@ -85,33 +85,38 @@ def main():
     print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
     
-    # Initialize sensor variable as empty
+    # Start empty. We create the sensor inside the loop.
     dht_device = None
 
     while True:
         try:
-            # 1. Self-Healing Sensor Check
-            # If the sensor crashed previously, this restarts it fresh
+            # 1. Self-Healing: Create Sensor if missing
             if dht_device is None:
-                # *** FIX IS HERE: Use adafruit_dht.DHT11, not dht.DHT11 ***
-                dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
+                try:
+                    dht_device = dht.DHT11(DHT_SENSOR_PIN)
+                except Exception as e:
+                    print(f"Sensor init failed (Retrying in 2s): {e}")
+                    time.sleep(2)
+                    continue
 
             # 2. Read Sensors
             try:
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
             except RuntimeError as e:
-                # Common reading error (Checksum/Timing), just retry silently
+                # Common reading error (Checksum), just retry
                 time.sleep(2.0)
                 continue
             except Exception as e:
-                # Critical error (Sensor disconnected/crashed)
+                print(f"Sensor Crash: {e}")
+                # Destroy the object so we can rebuild it next loop.
                 try:
                     dht_device.exit()
-                except:
-                    pass
-                dht_device = None  # Force Restart next loop
-                raise e # Throw error to outer loop to print it
+                except Exception:
+                    pass # IGNORE the 'list.remove' error here
+                dht_device = None
+                time.sleep(1)
+                continue
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -135,15 +140,12 @@ def main():
                     }
 
                     # Log to CSV
-                    try:
-                        file_exists = os.path.isfile(LOG_FILE_PATH)
-                        with open(LOG_FILE_PATH, 'a', newline='') as f:
-                            writer = csv.DictWriter(f, fieldnames=payload.keys())
-                            if not file_exists: writer.writeheader()
-                            writer.writerow(payload)
-                        print(">> Saved to CSV")
-                    except Exception as e:
-                         print(f">> CSV Failed: {e}")
+                    file_exists = os.path.isfile(LOG_FILE_PATH)
+                    with open(LOG_FILE_PATH, 'a', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=payload.keys())
+                        if not file_exists: writer.writeheader()
+                        writer.writerow(payload)
+                    print(">> Saved to CSV")
 
                     # Upload to Server
                     try:
@@ -158,14 +160,12 @@ def main():
 
         except KeyboardInterrupt:
             if lcd: lcd.display_string("System Stopped", 1)
-            # Safe exit on Ctrl+C
-            if dht_device:
+            if dht_device: 
                 try: dht_device.exit()
                 except: pass
             break
         except Exception as e:
-            print(f"Critical Error: {e}")
-            # Double safety: Ensure we reset the sensor if a crash happens
+            print(f"Main Loop Error: {e}")
             if dht_device:
                 try: dht_device.exit()
                 except: pass
