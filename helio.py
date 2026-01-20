@@ -21,7 +21,6 @@ class I2CLCD:
         self.bus = smbus2.SMBus(port)
         self.LCD_WIDTH = 20
         
-        # DEFINED FIRST
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
         self.TIMING = 0.0005
@@ -94,6 +93,7 @@ def main():
             # 1. Self-Healing Sensor Check
             # If the sensor crashed previously, this restarts it fresh
             if dht_device is None:
+                # *** FIX IS HERE: Use adafruit_dht.DHT11, not dht.DHT11 ***
                 dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
 
             # 2. Read Sensors
@@ -106,7 +106,6 @@ def main():
                 continue
             except Exception as e:
                 # Critical error (Sensor disconnected/crashed)
-                # We attempt to clean up, but use try/pass to prevent crashing if it fails
                 try:
                     dht_device.exit()
                 except:
