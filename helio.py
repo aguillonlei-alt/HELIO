@@ -83,36 +83,49 @@ def calculate_heat_index(T_c, R):
 
 # --- Main Logic ---
 def main():
+    # A. Setup LCD
+    # We create the LCD here, AFTER the class is defined
+    try:
+        lcd = I2CLCD(LCD_I2C_ADDRESS)
+        lcd.display_string("HELIO System", 1)
+        lcd.display_string("Booting...", 2)
+    except Exception as e:
+        lcd = None
+        print(f"LCD Init Warning: {e}") 
+
     print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
     
+    # Start with no sensor
     dht_device = None
 
     while True:
         try:
-            # 1. Self-Healing: Create Sensor if missing
+            # B. Self-Healing Sensor Logic
             if dht_device is None:
                 try:
-                    # FIXED: Uses 'adafruit_dht' (The real name)
+                    # FIXED: Uses 'adafruit_dht' to match the import at the top
                     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
                 except Exception as e:
                     print(f"Sensor init failed (Retrying in 2s): {e}")
                     time.sleep(2)
                     continue
 
-            # 2. Read Sensors
+            # C. Read Data
             try:
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
-            except RuntimeError as e:
+            except RuntimeError:
+                # Common checksum error, just retry
                 time.sleep(2.0)
                 continue
             except Exception as e:
+                # Critical sensor crash
                 print(f"Sensor Crash: {e}")
                 try:
                     dht_device.exit()
                 except Exception:
-                    pass 
+                    pass # Ignore errors while exiting
                 dht_device = None
                 time.sleep(1)
                 continue
@@ -146,16 +159,16 @@ def main():
                         writer.writerow(payload)
                     print(">> Saved to CSV")
 
-                    # Upload to Server
+                    # Upload
                     try:
                         requests.post(SERVER_URL, data=payload, timeout=10)
                         print(">> Upload Attempted")
                     except Exception as e:
-                        print(f">> Upload Failed: {e}")
+                        print(f">> Upload Warning: {e}")
 
                     last_action_time = time.time()
             else:
-                print("Sensor returned None. Retrying...")
+                print("Reading... (Sensor returned None)")
 
         except KeyboardInterrupt:
             if lcd: lcd.display_string("System Stopped", 1)
