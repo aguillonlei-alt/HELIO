@@ -1,6 +1,6 @@
 import time
 import board
-import adafruit_dht as dht  # FIXED: Imported as 'dht'
+import adafruit_dht  # FIXED: Removed 'as dht' to match the rest of the code
 import os
 import csv
 import requests
@@ -14,14 +14,15 @@ LOG_INTERVAL = 3600
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
-# --- LCD DRIVER CLASS ---
+# --- LCD DRIVER CLASS (MOVED TO TOP) ---
+# This MUST be defined before we try to use 'lcd = I2CLCD(...)'
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
         self.LCD_WIDTH = 20
         
-        # DEFINED FIRST to prevent "AttributeError"
+        # DEFINED FIRST
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
         self.E_PULSE = 0.0005
@@ -85,7 +86,6 @@ def main():
     print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
     
-    # Start empty. We create the sensor inside the loop.
     dht_device = None
 
     while True:
@@ -93,7 +93,8 @@ def main():
             # 1. Self-Healing: Create Sensor if missing
             if dht_device is None:
                 try:
-                    dht_device = dht.DHT11(DHT_SENSOR_PIN)
+                    # FIXED: Uses 'adafruit_dht' (The real name)
+                    dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
                 except Exception as e:
                     print(f"Sensor init failed (Retrying in 2s): {e}")
                     time.sleep(2)
@@ -104,16 +105,14 @@ def main():
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
             except RuntimeError as e:
-                # Common reading error (Checksum), just retry
                 time.sleep(2.0)
                 continue
             except Exception as e:
                 print(f"Sensor Crash: {e}")
-                # Destroy the object so we can rebuild it next loop.
                 try:
                     dht_device.exit()
                 except Exception:
-                    pass # IGNORE the 'list.remove' error here
+                    pass 
                 dht_device = None
                 time.sleep(1)
                 continue
