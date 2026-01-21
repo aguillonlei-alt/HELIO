@@ -1,6 +1,6 @@
 import time
 import board
-import adafruit_dht  # FIXED: Removed 'as dht' to match the rest of the code
+import adafruit_dht
 import os
 import csv
 import requests
