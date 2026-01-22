@@ -7,22 +7,13 @@ import requests
 import smbus2
 from datetime import datetime
 
-# --- Configuration ---
-DHT_SENSOR_PIN = board.D17   
-LCD_I2C_ADDRESS = 0x27       
-LOG_INTERVAL = 3600          
-LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
-SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
-
-# --- LCD DRIVER CLASS (MOVED TO TOP) ---
-# This MUST be defined before we try to use 'lcd = I2CLCD(...)'
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
         self.LCD_WIDTH = 20
         
-        # DEFINED FIRST
+        # Define Backlight settings BEFORE sending commands
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
         self.E_PULSE = 0.0005
@@ -38,6 +29,7 @@ class I2CLCD:
         time.sleep(self.E_DELAY)
 
     def lcd_byte(self, bits, mode):
+        # mode = 1 for data, 0 for command
         bits_high = mode | (bits & 0xF0) | self.BACKLIGHT
         bits_low = mode | ((bits << 4) & 0xF0) | self.BACKLIGHT
         self.bus.write_byte(self.addr, bits_high)
@@ -61,16 +53,14 @@ class I2CLCD:
         for i in range(self.LCD_WIDTH):
             self.lcd_byte(ord(message[i]), 1)
 
-# --- Initialize LCD (Global) ---
-try:
-    lcd = I2CLCD(LCD_I2C_ADDRESS)
-    lcd.display_string("HELIO System", 1)
-    lcd.display_string("Booting...", 2)
-except Exception as e:
-    lcd = None
-    print(f"LCD Init Error: {e}") 
+#Configuration
+DHT_SENSOR_PIN = board.D17
+LCD_I2C_ADDRESS = 0x27
+LOG_INTERVAL = 3600
+LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
+SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
-# --- Calculation ---
+#Math Helper
 def calculate_heat_index(T_c, R):
     if T_c is None or R is None: return None
     T = T_c * 1.8 + 32
@@ -81,51 +71,48 @@ def calculate_heat_index(T_c, R):
          (c7*T**2*R) + (c8*T*R**2) + (c9*T**2*R**2)
     return (HI - 32) * (5/9)
 
-# --- Main Logic ---
+#Main Logic
 def main():
-    # A. Setup LCD
-    # We create the LCD here, AFTER the class is defined
+    # Setup LCD
+    # This guarantees the Class is loaded first
+    lcd = None
     try:
         lcd = I2CLCD(LCD_I2C_ADDRESS)
         lcd.display_string("HELIO System", 1)
         lcd.display_string("Booting...", 2)
     except Exception as e:
-        lcd = None
-        print(f"LCD Init Warning: {e}") 
+        print(f"LCD Warning: {e}")
 
     print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
     
-    # Start with no sensor
+    # Initialize Sensor variable
     dht_device = None
 
     while True:
         try:
-            # B. Self-Healing Sensor Logic
+            # --- Self-Healing Sensor Connection ---
             if dht_device is None:
                 try:
-                    # FIXED: Uses 'adafruit_dht' to match the import at the top
                     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
                 except Exception as e:
-                    print(f"Sensor init failed (Retrying in 2s): {e}")
+                    print(f"Sensor init failed (Retrying...): {e}")
                     time.sleep(2)
                     continue
 
-            # C. Read Data
+            # Read Data
             try:
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
             except RuntimeError:
-                # Common checksum error, just retry
+                # Common read error, try again
                 time.sleep(2.0)
                 continue
             except Exception as e:
-                # Critical sensor crash
-                print(f"Sensor Crash: {e}")
-                try:
-                    dht_device.exit()
-                except Exception:
-                    pass # Ignore errors while exiting
+                # Sensor disconnected/crashed
+                print(f"Sensor Error: {e}")
+                try: dht_device.exit()
+                except: pass
                 dht_device = None
                 time.sleep(1)
                 continue
@@ -135,6 +122,7 @@ def main():
             if temp_c is not None and hum is not None:
                 hi_c = calculate_heat_index(temp_c, hum)
 
+                # Update LCD
                 if lcd:
                     lcd.display_string(f"Temp: {temp_c:.1f} C", 1)
                     lcd.display_string(f"Hum:  {hum:.0f} %", 2)
@@ -143,6 +131,7 @@ def main():
                 
                 print(f"[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
 
+                # Save and Upload
                 if time.time() - last_action_time >= LOG_INTERVAL:
                     payload = {
                         "timestamp": timestamp,
@@ -151,7 +140,7 @@ def main():
                         "heat_index": f"{hi_c:.2f}"
                     }
 
-                    # Log to CSV
+                    # CSV
                     file_exists = os.path.isfile(LOG_FILE_PATH)
                     with open(LOG_FILE_PATH, 'a', newline='') as f:
                         writer = csv.DictWriter(f, fieldnames=payload.keys())
@@ -159,7 +148,7 @@ def main():
                         writer.writerow(payload)
                     print(">> Saved to CSV")
 
-                    # Upload
+                    # Server
                     try:
                         requests.post(SERVER_URL, data=payload, timeout=10)
                         print(">> Upload Attempted")
@@ -168,7 +157,7 @@ def main():
 
                     last_action_time = time.time()
             else:
-                print("Reading... (Sensor returned None)")
+                print("Reading Sensor...")
 
         except KeyboardInterrupt:
             if lcd: lcd.display_string("System Stopped", 1)
