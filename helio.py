@@ -7,19 +7,19 @@ import requests
 import smbus2
 from datetime import datetime
 
+# Class Definition
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
-        self.LCD_WIDTH = 20
+        self.LCD_WIDTH = 20  # Matches your 20x4 Screen
         
-        # Define Backlight settings BEFORE sending commands
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
         self.E_PULSE = 0.0005
         self.E_DELAY = 0.0005
         
-        # Initialization Sequence
+        # Init Sequence
         self.lcd_byte(0x33, 0) 
         self.lcd_byte(0x32, 0) 
         self.lcd_byte(0x06, 0) 
@@ -29,7 +29,6 @@ class I2CLCD:
         time.sleep(self.E_DELAY)
 
     def lcd_byte(self, bits, mode):
-        # mode = 1 for data, 0 for command
         bits_high = mode | (bits & 0xF0) | self.BACKLIGHT
         bits_low = mode | ((bits << 4) & 0xF0) | self.BACKLIGHT
         self.bus.write_byte(self.addr, bits_high)
@@ -45,22 +44,27 @@ class I2CLCD:
         time.sleep(self.E_DELAY)
 
     def display_string(self, message, line):
+        message = str(message)
         message = message.ljust(self.LCD_WIDTH, " ")
+        
+        # Select Line Address for 20x4 LCD
         if line == 1: self.lcd_byte(0x80, 0)
         elif line == 2: self.lcd_byte(0xC0, 0)
         elif line == 3: self.lcd_byte(0x94, 0)
         elif line == 4: self.lcd_byte(0xD4, 0)
+        
+        # Loop through exactly 20 characters
         for i in range(self.LCD_WIDTH):
             self.lcd_byte(ord(message[i]), 1)
 
-#Configuration
+# Configuration
 DHT_SENSOR_PIN = board.D17
 LCD_I2C_ADDRESS = 0x27
 LOG_INTERVAL = 3600
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
-#Math Helper
+# Math Helper
 def calculate_heat_index(T_c, R):
     if T_c is None or R is None: return None
     T = T_c * 1.8 + 32
@@ -71,27 +75,22 @@ def calculate_heat_index(T_c, R):
          (c7*T**2*R) + (c8*T*R**2) + (c9*T**2*R**2)
     return (HI - 32) * (5/9)
 
-#Main Logic
+# Main Logic
 def main():
-    # Setup LCD
-    # This guarantees the Class is loaded first
     lcd = None
     try:
         lcd = I2CLCD(LCD_I2C_ADDRESS)
         lcd.display_string("HELIO System", 1)
         lcd.display_string("Booting...", 2)
     except Exception as e:
-        print(f"LCD Warning: {e}")
+        print(f"LCD Init Warning: {e}")
 
     print("HELIO Started (Sensor on GPIO 17)...")
     last_action_time = time.time() - LOG_INTERVAL
-    
-    # Initialize Sensor variable
     dht_device = None
 
     while True:
         try:
-            # --- Self-Healing Sensor Connection ---
             if dht_device is None:
                 try:
                     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
@@ -105,11 +104,9 @@ def main():
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
             except RuntimeError:
-                # Common read error, try again
                 time.sleep(2.0)
                 continue
             except Exception as e:
-                # Sensor disconnected/crashed
                 print(f"Sensor Error: {e}")
                 try: dht_device.exit()
                 except: pass
@@ -122,7 +119,6 @@ def main():
             if temp_c is not None and hum is not None:
                 hi_c = calculate_heat_index(temp_c, hum)
 
-                # Update LCD
                 if lcd:
                     lcd.display_string(f"Temp: {temp_c:.1f} C", 1)
                     lcd.display_string(f"Hum:  {hum:.0f} %", 2)
@@ -131,7 +127,6 @@ def main():
                 
                 print(f"[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
 
-                # Save and Upload
                 if time.time() - last_action_time >= LOG_INTERVAL:
                     payload = {
                         "timestamp": timestamp,
@@ -139,8 +134,8 @@ def main():
                         "humidity": f"{hum:.2f}",
                         "heat_index": f"{hi_c:.2f}"
                     }
-
-                    # CSV
+                    
+                    # CSV Save
                     file_exists = os.path.isfile(LOG_FILE_PATH)
                     with open(LOG_FILE_PATH, 'a', newline='') as f:
                         writer = csv.DictWriter(f, fieldnames=payload.keys())
@@ -148,7 +143,7 @@ def main():
                         writer.writerow(payload)
                     print(">> Saved to CSV")
 
-                    # Server
+                    # Server Upload
                     try:
                         requests.post(SERVER_URL, data=payload, timeout=10)
                         print(">> Upload Attempted")
