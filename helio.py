@@ -91,6 +91,9 @@ def main():
 
     while True:
         try:
+            temp_c = None
+            hum = None
+            
             if dht_device is None:
                 try:
                     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
