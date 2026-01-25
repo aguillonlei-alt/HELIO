@@ -50,7 +50,7 @@ class I2CLCD:
         for i in range(self.LCD_WIDTH):
             self.lcd_byte(ord(message[i]), 1)
 
-DHT_SENSOR_PIN = board.D22  
+DHT_SENSOR_PIN = board.D22
 LCD_I2C_ADDRESS = 0x27
 LOG_INTERVAL = 3600
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
@@ -58,6 +58,10 @@ SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
 def calculate_heat_index(T_c, R):
     if T_c is None or R is None: return None
+    
+    if T_c < 26.7:
+        return T_c
+
     T = T_c * 1.8 + 32
     c1, c2, c3 = -42.379, 2.04901523, 10.14333127
     c4, c5, c6 = -0.22475541, -6.83783e-3, -5.481717e-2
