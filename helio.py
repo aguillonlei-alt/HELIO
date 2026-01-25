@@ -7,19 +7,16 @@ import requests
 import smbus2
 from datetime import datetime
 
-# Class Definition
 class I2CLCD:
     def __init__(self, addr, port=1):
         self.addr = addr
         self.bus = smbus2.SMBus(port)
-        self.LCD_WIDTH = 20  # Matches your 20x4 Screen
-        
+        self.LCD_WIDTH = 20
         self.BACKLIGHT = 0x08 
         self.ENABLE = 0b00000100
         self.E_PULSE = 0.0005
         self.E_DELAY = 0.0005
         
-        # Init Sequence
         self.lcd_byte(0x33, 0) 
         self.lcd_byte(0x32, 0) 
         self.lcd_byte(0x06, 0) 
@@ -46,25 +43,19 @@ class I2CLCD:
     def display_string(self, message, line):
         message = str(message)
         message = message.ljust(self.LCD_WIDTH, " ")
-        
-        # Select Line Address for 20x4 LCD
         if line == 1: self.lcd_byte(0x80, 0)
         elif line == 2: self.lcd_byte(0xC0, 0)
         elif line == 3: self.lcd_byte(0x94, 0)
         elif line == 4: self.lcd_byte(0xD4, 0)
-        
-        # Loop through exactly 20 characters
         for i in range(self.LCD_WIDTH):
             self.lcd_byte(ord(message[i]), 1)
 
-# Configuration
-DHT_SENSOR_PIN = board.D17
+DHT_SENSOR_PIN = board.D22  
 LCD_I2C_ADDRESS = 0x27
 LOG_INTERVAL = 3600
 LOG_FILE_PATH = "/home/pi/helio_data_log.csv"
 SERVER_URL = "http://YOUR_WEBSITE_OR_IP/api/upload_data.php"
 
-# Math Helper
 def calculate_heat_index(T_c, R):
     if T_c is None or R is None: return None
     T = T_c * 1.8 + 32
@@ -75,17 +66,16 @@ def calculate_heat_index(T_c, R):
          (c7*T**2*R) + (c8*T*R**2) + (c9*T**2*R**2)
     return (HI - 32) * (5/9)
 
-# Main Logic
 def main():
     lcd = None
     try:
         lcd = I2CLCD(LCD_I2C_ADDRESS)
         lcd.display_string("HELIO System", 1)
-        lcd.display_string("Booting...", 2)
+        lcd.display_string("Waiting...", 2)
     except Exception as e:
         print(f"LCD Init Warning: {e}")
 
-    print("HELIO Started (Sensor on GPIO 17)...")
+    print("HELIO Started on GPIO 22...")
     last_action_time = time.time() - LOG_INTERVAL
     dht_device = None
 
@@ -93,34 +83,31 @@ def main():
         try:
             temp_c = None
             hum = None
-            
+
             if dht_device is None:
                 try:
                     dht_device = adafruit_dht.DHT11(DHT_SENSOR_PIN)
-                except Exception as e:
-                    print(f"Sensor init failed (Retrying...): {e}")
-                    time.sleep(2)
-                    continue
+                except Exception:
+                    pass
 
-            # Read Data
             try:
+                dht_device.measure()
                 temp_c = dht_device.temperature
                 hum = dht_device.humidity
             except RuntimeError:
+                print(".", end="", flush=True)
                 time.sleep(2.0)
                 continue
-            except Exception as e:
-                print(f"Sensor Error: {e}")
-                try: dht_device.exit()
-                except: pass
+            except Exception:
                 dht_device = None
                 time.sleep(1)
                 continue
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
             if temp_c is not None and hum is not None:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 hi_c = calculate_heat_index(temp_c, hum)
+
+                print(f"\n[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
 
                 if lcd:
                     lcd.display_string(f"Temp: {temp_c:.1f} C", 1)
@@ -128,8 +115,6 @@ def main():
                     lcd.display_string(f"HI:   {hi_c:.1f} C", 3)
                     lcd.display_string(f"Status: LOGGING", 4)
                 
-                print(f"[{timestamp}] T:{temp_c} H:{hum} HI:{hi_c:.2f}")
-
                 if time.time() - last_action_time >= LOG_INTERVAL:
                     payload = {
                         "timestamp": timestamp,
@@ -138,40 +123,30 @@ def main():
                         "heat_index": f"{hi_c:.2f}"
                     }
                     
-                    # CSV Save
                     file_exists = os.path.isfile(LOG_FILE_PATH)
                     with open(LOG_FILE_PATH, 'a', newline='') as f:
                         writer = csv.DictWriter(f, fieldnames=payload.keys())
                         if not file_exists: writer.writeheader()
                         writer.writerow(payload)
                     print(">> Saved to CSV")
-
-                    # Server Upload
+                    
                     try:
                         requests.post(SERVER_URL, data=payload, timeout=10)
                         print(">> Upload Attempted")
-                    except Exception as e:
-                        print(f">> Upload Warning: {e}")
+                    except Exception:
+                        pass
 
                     last_action_time = time.time()
-            else:
-                print("Reading Sensor...")
+            
+            time.sleep(2.0)
 
         except KeyboardInterrupt:
-            if lcd: lcd.display_string("System Stopped", 1)
-            if dht_device: 
-                try: dht_device.exit()
-                except: pass
+            if lcd: lcd.display_string("Stopped", 1)
+            if dht_device: dht_device.exit()
             break
-        except Exception as e:
-            print(f"Main Loop Error: {e}")
-            if dht_device:
-                try: dht_device.exit()
-                except: pass
+        except Exception:
             dht_device = None
             time.sleep(2)
-
-        time.sleep(2)
 
 if __name__ == '__main__':
     main()
