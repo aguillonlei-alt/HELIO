@@ -8,16 +8,27 @@ dht_device = adafruit_dht.DHT11(DHT_PIN)
 def calculate_heat_index(T_c, R):
     if T_c is None or R is None: return None
     
-    if T_c < 26.7:
+    T_f = T_c * 1.8 + 32
+    
+    if T_f < 80:
         return T_c
-        
-    T = T_c * 1.8 + 32
-    c1, c2, c3 = -42.379, 2.04901523, 10.14333127
-    c4, c5, c6 = -0.22475541, -6.83783e-3, -5.481717e-2
-    c7, c8, c9 = 1.22874e-3, 8.5282e-4, -1.99e-6
-    HI = c1 + (c2*T) + (c3*R) + (c4*T*R) + (c5*T**2) + (c6*R**2) + \
-         (c7*T**2*R) + (c8*T*R**2) + (c9*T**2*R**2)
-    return (HI - 32) * (5/9)
+
+    c1 = -42.379
+    c2 = 2.04901523
+    c3 = 10.14333127
+    c4 = -0.22475541
+    c5 = -6.83783e-3
+    c6 = -5.481717e-2
+    c7 = 1.22874e-3
+    c8 = 8.5282e-4
+    c9 = -1.99e-6
+
+    HI = c1 + (c2 * T_f) + (c3 * R) + (c4 * T_f * R) + (c5 * T_f**2) + \
+         (c6 * R**2) + (c7 * T_f**2 * R) + (c8 * T_f * R**2) + (c9 * T_f**2 * R**2)
+
+    HI_c = (HI - 32) * 0.55555
+    
+    return HI_c
 
 print(f"--- DIAGNOSTIC MODE: GPIO {DHT_PIN} ---")
 print("Waiting for sensor pulse...")
@@ -38,7 +49,10 @@ while True:
         
     except Exception as e:
         print(f"Critical Error: {e}")
-        dht_device.exit()
+        try:
+            dht_device.exit()
+        except:
+            pass
         time.sleep(1)
         dht_device = adafruit_dht.DHT11(DHT_PIN)
 
